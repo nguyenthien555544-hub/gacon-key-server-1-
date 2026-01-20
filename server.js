@@ -1,64 +1,111 @@
 const express = require("express");
-const bodyParser = require("body-parser");
-const cors = require("cors");
-
 const app = express();
-app.use(cors());
-app.use(bodyParser.json());
-
-/*
- KEY STRUCT:
- {
-   key: "ABC123",
-   type: "FREE" | "VIP",
-   exp: timestamp,
-   device: null | "fingerprint"
- }
-*/
-
-let KEYS = [];
-
-/* ========== ADMIN CREATE KEY ========== */
-app.post("/admin/create", (req, res) => {
-  const { key, type, hours } = req.body;
-  if (!key) return res.json({ ok: false });
-
-  KEYS.push({
-    key,
-    type: type || "FREE",
-    exp: Date.now() + (hours || 24) * 3600000,
-    device: null
-  });
-
-  res.json({ ok: true });
-});
-
-/* ========== CHECK KEY ========== */
-app.post("/check", (req, res) => {
-  const { key, device } = req.body;
-  const k = KEYS.find(x => x.key === key);
-
-  if (!k) return res.json({ ok: false, msg: "KEY SAI" });
-  if (Date.now() > k.exp) return res.json({ ok: false, msg: "KEY HẾT HẠN" });
-
-  if (!k.device) k.device = device;
-  if (k.device !== device)
-    return res.json({ ok: false, msg: "KEY ĐÃ DÙNG MÁY KHÁC" });
-
-  res.json({
-    ok: true,
-    type: k.type,
-    exp: k.exp
-  });
-});
-
-/* ========== STAT ========== */
-app.get("/stat", (req, res) => {
-  res.json({
-    total: KEYS.length,
-    online: KEYS.filter(k => Date.now() < k.exp).length
-  });
-});
-
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("KEY SERVER RUNNING"));
+
+app.use(express.json());
+
+/* ===== CONFIG ===== */
+const ADMIN_PASSWORD = "123456"; // đổi mật khẩu ở đây
+
+/* ===== DATABASE TẠM (RAM) ===== */
+const KEYS = {}; 
+// key: { type, expire, ip }
+
+/* ===== ROOT ===== */
+app.get("/", (req, res) => {
+  res.send("🚀 GACON KEY SERVER RUNNING");
+});
+
+/* ===== ADMIN WEB ===== */
+app.get("/admin", (req, res) => {
+  res.send(`
+  <h2>Gacon Key Admin</h2>
+  <input id="pass" placeholder="Admin password"><br><br>
+  <input id="key" placeholder="Key"><br>
+  <select id="type">
+    <option>FREE</option>
+    <option>VIP</option>
+  </select>
+  <input id="hour" placeholder="Expire (hours)" type="number"><br><br>
+  <button onclick="create()">Create Key</button>
+  <button onclick="remove()">Delete Key</button>
+
+  <pre id="log"></pre>
+
+  <script>
+    function create(){
+      fetch("/admin/create",{
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body:JSON.stringify({
+          pass:pass.value,
+          key:key.value,
+          type:type.value,
+          hour:hour.value
+        })
+      }).then(r=>r.json()).then(d=>log.textContent=JSON.stringify(d,null,2))
+    }
+
+    function remove(){
+      fetch("/admin/delete",{
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body:JSON.stringify({
+          pass:pass.value,
+          key:key.value
+        })
+      }).then(r=>r.json()).then(d=>log.textContent=JSON.stringify(d,null,2))
+    }
+  </script>
+  `);
+});
+
+/* ===== CREATE KEY ===== */
+app.post("/admin/create", (req, res) => {
+  const { pass, key, type, hour } = req.body;
+  if (pass !== ADMIN_PASSWORD) return res.json({ ok:false });
+
+  KEYS[key] = {
+    type,
+    expire: Date.now() + hour * 3600000,
+    ip: null
+  };
+
+  res.json({ ok:true, KEYS });
+});
+
+/* ===== DELETE KEY ===== */
+app.post("/admin/delete", (req, res) => {
+  const { pass, key } = req.body;
+  if (pass !== ADMIN_PASSWORD) return res.json({ ok:false });
+
+  delete KEYS[key];
+  res.json({ ok:true });
+});
+
+/* ===== BOT CHECK KEY ===== */
+app.get("/check", (req, res) => {
+  const { key } = req.query;
+  const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress;
+
+  if (!KEYS[key]) return res.json({ ok:false, msg:"Key không tồn tại" });
+
+  const data = KEYS[key];
+
+  if (Date.now() > data.expire)
+    return res.json({ ok:false, msg:"Key hết hạn" });
+
+  if (!data.ip) data.ip = ip;
+  if (data.ip !== ip)
+    return res.json({ ok:false, msg:"Key đang dùng máy khác" });
+
+  res.json({
+    ok:true,
+    type:data.type
+  });
+});
+
+/* ===== START ===== */
+app.listen(PORT, () => {
+  console.log("Server running on " + PORT);
+});
